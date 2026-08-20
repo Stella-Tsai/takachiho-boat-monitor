@@ -1,6 +1,7 @@
 import os
 import re
 from pathlib import Path
+from datetime import date, timedelta
 
 import requests
 from playwright.sync_api import sync_playwright
@@ -37,32 +38,40 @@ def click_week_view(frame):
 
 
 def target_week_label():
-    from datetime import date, timedelta
     target = date.fromisoformat(TARGET_DATE)
-    start = target - timedelta(days=target.weekday() - 3)  # EIPRO week starts Thu
+    # EIPRO's displayed weeks run Thursday -> Wednesday.
+    days_since_thursday = (target.weekday() - 3) % 7
+    start = target - timedelta(days=days_since_thursday)
     end = start + timedelta(days=6)
     return f"{start:%Y/%m/%d}～{end:%Y/%m/%d}"
 
 
 def go_to_target_week(frame):
-    """EIPRO exposes direct week-range links above the calendar.
-
-    The diagnostic showed the exact links, e.g. 2026/08/27～2026/09/02,
-    so clicking that range is much more reliable than guessing arrow selectors.
-    """
     label = target_week_label()
     print("Target week link:", label)
 
+    # Diagnostic proved these "week links" are actually <option> elements
+    # inside a <select>. Selecting the option is the correct interaction;
+    # clicking an invisible <option> will always timeout in Playwright.
     try:
-        exact = frame.get_by_text(label, exact=True)
-        if exact.count():
-            exact.first.click(timeout=5000)
-            frame.wait_for_timeout(1500)
-            return True
+        options = frame.locator("option")
+        for option in options.all():
+            try:
+                text = option.inner_text().strip()
+                value = option.get_attribute("value") or ""
+                if text == label or label in text:
+                    select = option.locator("xpath=ancestor::select[1]")
+                    if select.count():
+                        print("Selecting week option:", text, "value:", value)
+                        select.select_option(value=value)
+                        frame.wait_for_timeout(1800)
+                        return True
+            except Exception:
+                continue
     except Exception as exc:
-        print("Exact week-link click failed:", repr(exc))
+        print("Week select handling failed:", repr(exc))
 
-    # Fallback: locate an anchor whose text contains the exact range.
+    # Fallback for a real clickable anchor/link, if EIPRO changes back to that.
     try:
         for a in frame.locator("a").all():
             if not a.is_visible():
@@ -75,16 +84,16 @@ def go_to_target_week(frame):
     except Exception:
         pass
 
-    # Final fallback: click the next week arrow by geometry/order. In the
-    # current page the direct range links above make this normally unnecessary.
     return False
 
 
 def find_target_container(frame):
-    day = int(TARGET_DATE[-2:])
+    month = int(TARGET_DATE[5:7])
+    day = int(TARGET_DATE[8:10])
+
     for selector in (
         f"[data-date='{TARGET_DATE}']",
-        f"[data-date='{TARGET_DATE.replace('-','/')}']",
+        f"[data-date='{TARGET_DATE.replace('-', '/')}']",
     ):
         try:
             loc = frame.locator(selector).first
@@ -93,11 +102,9 @@ def find_target_container(frame):
         except Exception:
             pass
 
-    # In the observed EIPRO week view, each column header is rendered as
-    # '8/31 月曜日'. Find that header and use its nearest calendar column.
     patterns = [
-        rf"^{int(TARGET_DATE[5:7])}/0?{day}\s*月曜日$",
-        rf"^{int(TARGET_DATE[5:7])}/0?{day}\s*.*曜日$",
+        rf"^{month}/0?{day}\s*月曜日$",
+        rf"^{month}/0?{day}\s*.*曜日$",
         rf"^0?{day}$",
     ]
     for pattern in patterns:
@@ -111,7 +118,6 @@ def find_target_container(frame):
         except Exception:
             pass
 
-    # Generic day-column fallback.
     for selector in (".fc-col-header-cell", ".fc-day", ".fc-daygrid-day", "[class*=day]"):
         try:
             for node in frame.locator(selector).all():
