@@ -1,0 +1,29 @@
+name: Test Telegram
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send test Telegram message
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: "7446942156"
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+          url = f"https://api.telegram.org/bot{token}/sendMessage"
+          message = "🧪 高千穗峽划船監控 Telegram 測試成功！\n\n如果你看到這則訊息，代表 Bot、Chat ID 與 GitHub Actions 通知功能都正常。"
+          r = requests.post(url, data={"chat_id": chat_id, "text": message}, timeout=20)
+          print("Telegram response:", r.text)
+          r.raise_for_status()
+          if not r.json().get("ok"):
+              raise RuntimeError(f"Telegram API returned ok=false: {r.text}")
+          print("Telegram test passed.")
+          PY
